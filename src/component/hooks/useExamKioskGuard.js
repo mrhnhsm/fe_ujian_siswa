@@ -192,6 +192,12 @@ export default function useExamKioskGuard({
           "tab-switch",
           "Terdeteksi Anda berpindah tab/aplikasi. Aktivitas ini tercatat.",
         );
+      } else if (
+        lockedRef.current &&
+        !terminatedRef.current &&
+        !sedangFullscreen()
+      ) {
+        cobaKunciUlangFullscreen();
       }
     };
     const onBlur = () => {
@@ -208,7 +214,7 @@ export default function useExamKioskGuard({
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("blur", onBlur);
     };
-  }, [active, catatPelanggaran]);
+  }, [active, catatPelanggaran, cobaKunciUlangFullscreen]);
 
   // ---- keyboard shortcut, klik kanan, & buka tab baru ----
   useEffect(() => {
@@ -282,24 +288,22 @@ export default function useExamKioskGuard({
   // ulang.
   useEffect(() => {
     if (!active || !locked) return undefined;
-    for (let i = 0; i < HISTORY_BUFFER_DEPTH; i += 1) {
-      window.history.pushState(null, "", window.location.href);
-    }
-    const onPopState = () => {
-      if (!lockedRef.current || terminatedRef.current) return;
-      // Isi ulang buffer setiap kali popstate tertangkap, supaya
-      // beberapa kali back berturut-turut tetap tertahan.
+    const onPageShow = (e) => {
+      if (!e.persisted) return;
       for (let i = 0; i < HISTORY_BUFFER_DEPTH; i += 1) {
         window.history.pushState(null, "", window.location.href);
       }
-      catatPelanggaran(
-        "back-button",
-        'Gunakan tombol "Selesai" untuk mengakhiri ujian.',
-      );
+      if (!sedangFullscreen() && !terminatedRef.current) {
+        catatPelanggaran(
+          "back-button",
+          'Gunakan tombol "Selesai" untuk mengakhiri ujian.',
+        );
+        cobaKunciUlangFullscreen();
+      }
     };
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, [active, locked, catatPelanggaran]);
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, [active, locked, catatPelanggaran, cobaKunciUlangFullscreen]);
 
   // ---- cegah menutup/refresh tab tanpa sadar ----
   useEffect(() => {
