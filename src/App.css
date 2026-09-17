@@ -1,0 +1,107 @@
+:root,
+[data-theme="light"] {
+  --bg: #f4f7fc;
+  --bg-elevated: #ffffff;
+  --bg-soft: #eaf0fb;
+  --bg-hero-1: #060b16;
+  --bg-hero-2: #0d2a63;
+
+  --text: #0b1220;
+  --text-secondary: #5b6478;
+  --text-invert: #f5f8ff;
+
+  --blue-900: #081a3d;
+  --blue-800: #0d2a63;
+  --blue-700: #123a8a;
+  --blue-600: #1a4fc4;
+  --blue-500: #2f6bff;
+  --blue-400: #5c8cff;
+  --blue-100: #e3ecff;
+
+  --ink: #060b16;
+  --white: #ffffff;
+
+  --border: #dfe6f2;
+  --border-soft: #eaf0fa;
+
+  --shadow-sm: 0 4px 18px rgba(10, 26, 58, 0.07);
+  --shadow-md: 0 14px 36px rgba(10, 26, 58, 0.12);
+  --shadow-lg: 0 28px 70px rgba(10, 26, 58, 0.18);
+
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+  --font-body: "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", "IBM Plex Mono", monospace;
+
+  --header-glass: rgba(255, 255, 255, 0.66);
+  --header-glass-border: rgba(10, 26, 58, 0.08);
+  --header-glass-scrolled: rgba(255, 255, 255, 0.82);
+
+  --node-line: rgba(47, 107, 255, 0.35);
+  --node-dot: rgba(47, 107, 255, 0.9);
+
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --bg: #05070d;
+  --bg-elevated: #0c1428;
+  --bg-soft: #0a1120;
+  --bg-hero-1: #03050a;
+  --bg-hero-2: #0a1938;
+
+  --text: #e9eefb;
+  --text-secondary: #98a4c2;
+  --text-invert: #05070d;
+
+  --blue-900: #dbe7ff;
+  --blue-800: #bcd2ff;
+  --blue-700: #8fb3ff;
+  --blue-600: #5c8cff;
+  --blue-500: #3f74ff;
+  --blue-400: #2f5fd6;
+  --blue-100: #0e1c3d;
+
+  --ink: #eef3fc;
+  --white: #ffffff;
+
+  --border: #1b2540;
+  --border-soft: #141d34;
+
+  --shadow-sm: 0 4px 18px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 14px 36px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 28px 70px rgba(0, 0, 0, 0.6);
+
+  --header-glass: rgba(5, 7, 13, 0.6);
+  --header-glass-border: rgba(255, 255, 255, 0.08);
+  --header-glass-scrolled: rgba(8, 12, 24, 0.78);
+
+  --node-line: rgba(92, 140, 255, 0.35);
+  --node-dot: rgba(92, 140, 255, 0.95);
+
+  color-scheme: dark;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  transition:
+    background-color 0.25s ease,
+    color 0.25s ease;
+}
+
+html,
+body {
+  overscroll-behavior: none;
+  touch-action: pan-y;
+}
+
+.kiosk-shell-root {
+  overscroll-behavior: none;
+  touch-action: pan-y;
+  overflow: hidden;
+  height: 100dvh;
+}
