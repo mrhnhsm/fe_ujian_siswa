@@ -32,7 +32,7 @@ import "./App.css";
 
 const STEP_TOKEN = "token";
 const STEP_EXAM = "exam";
-const MAX_VIOLATIONS = 7;
+const MAX_VIOLATIONS = 4;
 
 function App() {
   const shellRef = useRef(null);
