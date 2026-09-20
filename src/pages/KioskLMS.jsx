@@ -34,8 +34,13 @@ export default function KioskLMS({ examData, guard, onSelesai }) {
   const [showKonfirmasi, setShowKonfirmasi] = useState(false);
   const [menyelesaikan, setMenyelesaikan] = useState(false);
   const [sisaWaktu, setSisaWaktu] = useState(null); // detik
+  const iframeRef = useRef(null);
 
   const DURASI_UJIAN = 4 * 60 * 60; // 4 jam
+
+  const fokusKeIframe = useCallback(() => {
+    iframeRef.current?.focus();
+  }, []);
 
   // ---- jaga-jaga: pastikan masih fullscreen begitu halaman ini tampil.
   // Ini idempotent (enterKiosk cek `!sedangFullscreen()` dulu), jadi
@@ -76,6 +81,15 @@ export default function KioskLMS({ examData, guard, onSelesai }) {
   // }, [expiresAt, akhiriUjian]);
 
   useEffect(() => {
+    const onWindowFocus = () => {
+      if (showKonfirmasi || menyelesaikan || guard.terminated) return;
+      fokusKeIframe();
+    };
+    window.addEventListener("focus", onWindowFocus);
+    return () => window.removeEventListener("focus", onWindowFocus);
+  }, [showKonfirmasi, menyelesaikan, guard.terminated, fokusKeIframe]);
+
+  useEffect(() => {
     let waktu = DURASI_UJIAN;
     setSisaWaktu(waktu);
     const id = window.setInterval(() => {
@@ -108,7 +122,10 @@ export default function KioskLMS({ examData, guard, onSelesai }) {
   }, [sisaWaktu]);
 
   const handleSelesaiClick = () => setShowKonfirmasi(true);
-  const handleBatalSelesai = () => setShowKonfirmasi(false);
+  const handleBatalSelesai = () => {
+    setShowKonfirmasi(false);
+    fokusKeIframe();
+  };
   const handleKonfirmasiSelesai = () => {
     setShowKonfirmasi(false);
     akhiriUjian({ tampilkanTransisi: true });
@@ -150,11 +167,17 @@ export default function KioskLMS({ examData, guard, onSelesai }) {
           </div>
         )}
         <iframe
+          ref={iframeRef}
           title="Ruang Ujian LMS"
           src={urlLms}
           className={`klms-frame${iframeSiap ? " klms-frame-ready" : ""}`}
-          onLoad={() => setIframeSiap(true)}
+          onLoad={() => {
+            setIframeSiap(true);
+            fokusKeIframe();
+          }}
+          sandbox="allow-scripts allow-same-origin allow-forms allow-downloads"
           allow="fullscreen"
+          referrerPolicy="strict-origin-when-cross-origin"
         />
       </div>
 
