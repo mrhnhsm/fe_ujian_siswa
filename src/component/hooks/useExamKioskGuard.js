@@ -43,7 +43,7 @@ import { playViolationBeep, playLockBeep } from "./kioskAudio";
 // sebagai PWA standalone atau dibungkus WebView native kiosk mode.
 // ============================================================
 
-const DEFAULT_MAX_VIOLATIONS = 4;
+const DEFAULT_MAX_VIOLATIONS = 100;
 const DEVTOOLS_THRESHOLD = 160; // px selisih outer-inner yang dicurigai devtools terbuka (docked)
 const DEVTOOLS_POLL_MS = 1000;
 const HISTORY_BUFFER_DEPTH = 5; // jumlah entry dummy yang didorong ke history saat lock aktif
