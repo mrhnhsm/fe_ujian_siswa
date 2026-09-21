@@ -1,78 +1,58 @@
-import { useCallback, useRef, useState, useEffect } from "react";
+import { useCallback, useRef, useState } from "react";
 import "antd/dist/reset.css";
 import "primereact/resources/themes/lara-light-blue/theme.css";
 import "primeicons/primeicons.css";
-import { WarningOutlined, ExpandOutlined } from "@ant-design/icons";
+import {
+  WarningOutlined,
+  ExpandOutlined,
+  MobileOutlined,
+} from "@ant-design/icons";
 import KioskValidationToken from "./pages/KioskValidationToken";
 import KioskLMS from "./pages/KioskLMS";
 import useExamKioskGuard from "./component/hooks/useExamKioskGuard";
 import "./App.css";
 
 // ============================================================
-// App.jsx (IMPROVED v3 - RESPONSIVE)
+// App.jsx
 //
-// PERBAIKAN:
-// - Responsive desktop + mobile
-// - Better fullscreen state management
-// - Memory leak prevention
-// - Mobile viewport + safe-area fixes
-// - Touch event handling
+// PENTING (fix bug "fullscreen keluar sendiri saat pindah dari
+// validasi token ke ruang ujian"):
+//
+// Fullscreen API browser mengikat status fullscreen ke ELEMEN DOM
+// spesifik yang memintanya. Kalau App.jsx meng-unmount komponen
+// halaman lama lalu me-mount komponen halaman baru (kondisional
+// render biasa), elemen yang tadinya fullscreen ikut lenyap dari
+// DOM -- dan browser OTOMATIS keluar dari fullscreen begitu itu
+// terjadi.
+//
+// Solusinya: satu shell fullscreen di sini (shellRef) yang TIDAK
+// PERNAH unmount selama sesi kiosk berjalan. Yang berganti hanya
+// KONTEN di dalamnya (halaman token vs halaman ujian). guard JUGA
+// cuma SATU instance, dibuat di sini, diteruskan sebagai prop ke
+// KEDUA halaman -- kedua halaman TIDAK BOLEH membuat instance
+// useExamKioskGuard sendiri, karena itu akan menciptakan target
+// fullscreen yang berbeda-beda dan menyebabkan bug yang sama.
 // ============================================================
 
 const STEP_TOKEN = "token";
 const STEP_EXAM = "exam";
-const MAX_VIOLATIONS = 4;
+const MAX_VIOLATIONS = 150;
 
 function App() {
   const shellRef = useRef(null);
   const [step, setStep] = useState(STEP_TOKEN);
   const [examData, setExamData] = useState(null);
-  const [appReady, setAppReady] = useState(true);
-  const [isMobile, setIsMobile] = useState(false);
-
-  // ---- Detect mobile + setup viewport ----
-  useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth <= 768);
-    };
-
-    // Setup viewport meta tag
-    const viewport = document.querySelector('meta[name="viewport"]');
-    if (viewport) {
-      viewport.setAttribute(
-        "content",
-        "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover",
-      );
-    }
-
-    // Prevent iOS scroll bounce
-    document.body.addEventListener(
-      "touchmove",
-      (e) => {
-        if (e.target === document.body) {
-          e.preventDefault();
-        }
-      },
-      { passive: false },
-    );
-
-    checkMobile();
-    window.addEventListener("resize", checkMobile);
-
-    return () => {
-      window.removeEventListener("resize", checkMobile);
-    };
-  }, []);
 
   const handleTerminate = useCallback(() => {
-    // Guard akan handle UI termination lewat guard.terminated
+    // Masing-masing halaman menampilkan UI terminasinya sendiri
+    // lewat guard.terminated -- di sini cukup dibiarkan kosong.
   }, []);
 
   const guard = useExamKioskGuard({
     targetRef: shellRef,
     maxViolations: MAX_VIOLATIONS,
     onTerminate: handleTerminate,
-    active: appReady,
+    active: true,
   });
 
   const handleTokenValid = useCallback((data) => {
@@ -86,35 +66,39 @@ function App() {
   }, []);
 
   return (
-    <div
-      ref={shellRef}
-      className={`kiosk-shell-root ${isMobile ? "mobile" : "desktop"}`}
-      data-device={isMobile ? "mobile" : "desktop"}
-    >
+    <div ref={shellRef} className="kiosk-shell-root">
       {step === STEP_EXAM && examData ? (
         <KioskLMS
           examData={examData}
           guard={guard}
           onSelesai={handleExamFinished}
-          isMobile={isMobile}
         />
       ) : (
-        <KioskValidationToken
-          guard={guard}
-          onTokenValid={handleTokenValid}
-          isMobile={isMobile}
-        />
+        <KioskValidationToken guard={guard} onTokenValid={handleTokenValid} />
       )}
 
-      {/* VIOLATIONS WARNING DISABLED */}
-      {/* {guard.peringatan && !guard.terminated && (
+      {/* ---------- Banner peringatan pelanggaran (global, di atas semua halaman) ---------- */}
+      {guard.peringatan && !guard.terminated && (
         <div className="kiosk-warning-banner">
           <WarningOutlined />
           <span>{guard.peringatan}</span>
         </div>
-      )} */}
+      )}
 
-      {/* ---- Resume fullscreen overlay ---- */}
+      <div className="kiosk-rotate-overlay" role="alert">
+        <MobileOutlined />
+        <h2>Putar HP ke Mode Potret</h2>
+        <p>Ruang ujian hanya bisa digunakan dalam posisi potret (tegak).</p>
+      </div>
+
+      {/* ----------------------------------------------------------------
+          Overlay "kembali ke mode terkunci" -- ditampilkan setiap kali
+          fullscreen terdeteksi keluar SELAMA sesi terkunci berlangsung.
+          Klik tombol di sini adalah user-gesture asli, satu-satunya cara
+          yang bisa diandalkan browser manapun untuk benar-benar kembali
+          ke fullscreen. Auto-retry di background (di dalam hook) tetap
+          dicoba duluan, overlay ini hanya muncul kalau itu gagal.
+         ---------------------------------------------------------------- */}
       {guard.locked && guard.fullscreenLost && !guard.terminated && (
         <div className="kiosk-resume-overlay">
           <div className="kiosk-resume-card">
@@ -124,12 +108,7 @@ function App() {
               Layar ujian harus tetap dalam mode layar penuh. Tekan tombol di
               bawah untuk melanjutkan.
             </p>
-            <button
-              type="button"
-              onClick={guard.enterKiosk}
-              className="kiosk-resume-btn"
-              onTouchEnd={guard.enterKiosk}
-            >
+            <button type="button" onClick={guard.enterKiosk}>
               Kembali ke Mode Terkunci
             </button>
           </div>

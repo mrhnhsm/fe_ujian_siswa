@@ -1,31 +1,11 @@
-/* ============================================================
-   kioskLms.css (IMPROVED v2)
-   
-   FIXES:
-   - Better mobile viewport handling (100dvh vs 100vh)
-   - Improved fullscreen stability
-   - Better backdrop filter support
-   - Fixed overflow and scroll issues
-   ============================================================ */
-
 .klms-shell {
   position: fixed;
   inset: 0;
-  width: 100%;
-  height: 100%;
   background: var(--ink);
   overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
   transition: opacity 0.4s ease;
-  /* Prevent iOS zoom on fullscreen */
-  -webkit-touch-callout: none;
-  -webkit-user-select: none;
-  touch-action: none;
-  /* Fix mereng di beberapa HP */
-  will-change: opacity;
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
 }
 
 .klms-shell-fading {
@@ -35,7 +15,7 @@
 
 /* ---------- Bar status atas ---------- */
 .klms-topbar {
-  position: fixed;
+  position: absolute;
   top: 0;
   left: 0;
   right: 0;
@@ -46,14 +26,8 @@
   justify-content: space-between;
   gap: 12px;
   padding: 0 18px;
-  background: var(--header-glass);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background: var(--bg-elevated);
   border-bottom: 1px solid var(--header-glass-border);
-  /* Improve performance */
-  will-change: transform;
-  transform: translateZ(0);
-  -webkit-transform: translateZ(0);
 }
 
 .klms-topbar-left {
@@ -70,7 +44,6 @@
   background: #35d07f;
   box-shadow: 0 0 0 0 rgba(53, 208, 127, 0.6);
   animation: klms-dot-pulse 2s ease-in-out infinite;
-  will-change: box-shadow;
 }
 
 @keyframes klms-dot-pulse {
@@ -142,26 +115,21 @@
 
 /* ---------- Iframe ---------- */
 .klms-frame-wrap {
-  position: fixed;
+  position: absolute;
   top: 52px;
   left: 0;
   right: 0;
   bottom: 0;
   background: var(--bg);
-  overflow: hidden;
 }
 
 .klms-frame {
+  display: block;
   width: 100%;
   height: 100%;
   border: 0;
   opacity: 0;
   transition: opacity 0.35s ease;
-  display: block;
-  /* Improve rendering performance */
-  will-change: opacity;
-  transform: translateZ(0);
-  -webkit-transform: translateZ(0);
 }
 
 .klms-frame-ready {
@@ -178,7 +146,6 @@
   gap: 12px;
   font-size: 13.5px;
   color: var(--text-secondary);
-  background: var(--bg);
 }
 
 .klms-frame-loading .anticon {
@@ -186,27 +153,9 @@
   color: var(--blue-500);
 }
 
-.klms-frame-error {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  font-size: 13.5px;
-  color: var(--text-secondary);
-  background: var(--bg);
-}
-
-.klms-frame-error .anticon {
-  font-size: 26px;
-  color: #d4451f;
-}
-
 /* ---------- Tombol Selesai mengambang ---------- */
 .klms-finish-btn {
-  position: fixed;
+  position: absolute;
   right: 18px;
   bottom: 22px;
   z-index: 6;
@@ -226,20 +175,15 @@
   transition:
     transform 0.18s ease,
     box-shadow 0.18s ease;
-  will-change: transform;
 }
 
 .klms-finish-btn:hover {
   transform: translateY(-2px);
 }
 
-.klms-finish-btn:active {
-  transform: translateY(0);
-}
-
 /* ---------- Modal konfirmasi ---------- */
 .klms-modal-overlay {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 8;
   display: flex;
@@ -318,8 +262,6 @@
   transition:
     transform 0.15s ease,
     opacity 0.15s ease;
-  border: none;
-  font-family: var(--font-body);
 }
 
 .klms-modal-btn-ghost {
@@ -334,6 +276,7 @@
 }
 
 .klms-modal-btn-solid {
+  border: none;
   color: var(--text-invert);
   background: linear-gradient(120deg, var(--blue-500), var(--blue-700));
   box-shadow: 0 10px 22px rgba(47, 107, 255, 0.36);
@@ -343,9 +286,9 @@
   transform: translateY(-1px);
 }
 
-/* ---------- Layar kunci paksa akibat pelanggaran ---------- */
+/* ---------- Layar kunci paksa akibat pelanggaran berulang ---------- */
 .klms-lockdown-overlay {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 9;
   display: flex;
@@ -381,7 +324,7 @@
 
 /* ---------- Layar transisi keluar ---------- */
 .klms-exit-overlay {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 10;
   display: flex;
@@ -410,136 +353,17 @@
   .klms-topbar {
     height: 46px;
     padding: 0 12px;
-    gap: 8px;
   }
-
   .klms-topbar-violation {
     display: none;
   }
-
   .klms-frame-wrap {
     top: 46px;
   }
-
   .klms-finish-btn {
     right: 14px;
     bottom: 16px;
     padding: 11px 16px;
     font-size: 13px;
-  }
-
-  .klms-modal-card {
-    max-width: calc(100vw - 40px);
-    padding: 24px 20px 18px;
-  }
-
-  .klms-lockdown-overlay {
-    padding: 24px;
-  }
-}
-
-/* ---------- Resume overlay (App.jsx) ---------- */
-.kiosk-resume-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 11;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-  background: rgba(3, 5, 10, 0.72);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-
-.kiosk-resume-card {
-  width: 100%;
-  max-width: 380px;
-  padding: 32px 28px;
-  text-align: center;
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-lg);
-  animation: klms-modal-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.kiosk-resume-card .anticon {
-  font-size: 40px;
-  color: var(--blue-500);
-  margin-bottom: 14px;
-}
-
-.kiosk-resume-card h2 {
-  font-family: var(--font-display);
-  font-size: 17px;
-  font-weight: 600;
-  color: var(--text);
-  margin: 0 0 10px;
-}
-
-.kiosk-resume-card p {
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text-secondary);
-  margin: 0 0 24px;
-}
-
-.kiosk-resume-btn {
-  width: 100%;
-  padding: 13px 20px;
-  border: none;
-  border-radius: 999px;
-  font-family: var(--font-body);
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--text-invert);
-  background: linear-gradient(120deg, var(--blue-500), var(--blue-700));
-  box-shadow: 0 10px 26px rgba(47, 107, 255, 0.36);
-  cursor: pointer;
-  transition:
-    transform 0.18s ease,
-    box-shadow 0.18s ease;
-  will-change: transform;
-}
-
-.kiosk-resume-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 12px 30px rgba(47, 107, 255, 0.42);
-}
-
-.kiosk-resume-btn:active {
-  transform: translateY(0);
-}
-
-/* ---------- Warning banner (hanya untuk reference, DISABLED di JS) ---------- */
-.kiosk-warning-banner {
-  position: fixed;
-  top: 18px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 50;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  max-width: min(92vw, 460px);
-  padding: 11px 18px;
-  border-radius: var(--radius-md);
-  font-size: 13px;
-  line-height: 1.4;
-  color: #fff;
-  background: linear-gradient(120deg, #d4451f, #a4222a);
-  box-shadow: var(--shadow-md);
-  animation: kiosk-banner-in 0.25s ease;
-}
-
-@keyframes kiosk-banner-in {
-  from {
-    opacity: 0;
-    transform: translate(-50%, -8px);
-  }
-  to {
-    opacity: 1;
-    transform: translate(-50%, 0);
   }
 }

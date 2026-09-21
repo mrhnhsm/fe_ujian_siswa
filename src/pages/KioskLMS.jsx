@@ -15,151 +15,110 @@ import {
 import "../assets/page/kioskLms.css";
 
 // ============================================================
-// KioskLMS.jsx (page 2) - IMPROVED
+// KioskLMS.jsx  (page 2)
 //
-// PERBAIKAN:
-// - Better iframe error handling
-// - Prevent iframe stuck dengan timeout detection
-// - Improved fullscreen stability
-// - Better memory management
+// PENTING: halaman ini TIDAK LAGI membuat instance
+// useExamKioskGuard sendiri. `guard` diterima sebagai PROP dari
+// App.jsx -- SAMA PERSIS dengan instance yang dipakai
+// KioskValidationToken. Karena fullscreen sudah aktif sejak
+// gerbang di halaman sebelumnya, dan target-nya adalah shell di
+// App.jsx yang tidak pernah unmount, mode kiosk di sini otomatis
+// tetap aktif tanpa perlu gerbang/klik kedua -- dan yang lebih
+// penting, TIDAK keluar dari fullscreen saat "pindah halaman" ini.
 // ============================================================
 
-const IFRAME_LOAD_TIMEOUT = 15000; // 15 detik timeout
-const IFRAME_HEALTH_CHECK_INTERVAL = 5000; // Check setiap 5 detik
-
-export default function KioskLMS({ examData, guard, onSelesai, isMobile }) {
+export default function KioskLMS({ examData, guard, onSelesai }) {
   const { urlLms, idKelas, expiresAt } = examData || {};
 
   const [iframeSiap, setIframeSiap] = useState(false);
-  const [iframeError, setIframeError] = useState(null);
   const [showKonfirmasi, setShowKonfirmasi] = useState(false);
   const [menyelesaikan, setMenyelesaikan] = useState(false);
-  const [sisaWaktu, setSisaWaktu] = useState(null);
+  const [sisaWaktu, setSisaWaktu] = useState(null); // detik
   const iframeRef = useRef(null);
-  const loadTimeoutRef = useRef(null);
-  const healthCheckRef = useRef(null);
 
   const DURASI_UJIAN = 4 * 60 * 60; // 4 jam
-  const TOPBAR_HEIGHT = isMobile ? 46 : 52; // Responsive topbar
 
   const fokusKeIframe = useCallback(() => {
-    try {
-      if (iframeRef.current?.contentWindow) {
-        iframeRef.current.contentWindow.focus();
-      }
-    } catch (e) {
-      // Cross-origin, ignore
-    }
+    iframeRef.current?.focus();
   }, []);
 
-  // ---- Fullscreen safety check saat halaman mount ----
+  // ---- jaga-jaga: pastikan masih fullscreen begitu halaman ini tampil.
+  // Ini idempotent (enterKiosk cek `!sedangFullscreen()` dulu), jadi
+  // aman dipanggil ulang -- fullscreen TIDAK akan sempat keluar karena
+  // shell/target-nya sama dan tidak pernah unmount. ----
   useEffect(() => {
     guard.enterKiosk();
-    return () => {
-      if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
-      if (healthCheckRef.current) clearInterval(healthCheckRef.current);
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---- Iframe load timeout detection ----
-  useEffect(() => {
-    if (!urlLms) return;
-
-    loadTimeoutRef.current = setTimeout(() => {
-      if (!iframeSiap) {
-        setIframeError("Iframe loading timeout - coba muat ulang");
-        console.error("Iframe load timeout after 15s");
-      }
-    }, IFRAME_LOAD_TIMEOUT);
-
-    return () => {
-      if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
-    };
-  }, [urlLms, iframeSiap]);
-
-  // ---- Iframe health check (deteksi stuck) ----
-  useEffect(() => {
-    if (!iframeSiap) return;
-
-    healthCheckRef.current = setInterval(() => {
-      try {
-        // Cek apakah iframe masih accessible
-        const doc = iframeRef.current?.contentDocument;
-        if (!doc && iframeSiap) {
-          console.warn("Iframe health check: document not accessible");
-        }
-      } catch (e) {
-        // Cross-origin error adalah normal, ignore
-      }
-    }, IFRAME_HEALTH_CHECK_INTERVAL);
-
-    return () => {
-      if (healthCheckRef.current) clearInterval(healthCheckRef.current);
-    };
-  }, [iframeSiap]);
-
-  // ---- Akhiri ujian ----
+  // ---- akhiri ujian (dipakai baik oleh tombol Selesai maupun waktu habis/terminasi) ----
   const akhiriUjian = useCallback(
     async ({ tampilkanTransisi = true } = {}) => {
       if (menyelesaikan) return;
       if (tampilkanTransisi) setMenyelesaikan(true);
-
-      if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
-      if (healthCheckRef.current) clearInterval(healthCheckRef.current);
-
       await guard.exitKiosk();
       setTimeout(() => onSelesai?.(), tampilkanTransisi ? 450 : 0);
     },
     [guard, menyelesaikan, onSelesai],
   );
-
-  // ---- Countdown timer ----
+  const akhiriUjianRef = useRef(akhiriUjian);
   useEffect(() => {
-    let waktu = DURASI_UJIAN;
-    setSisaWaktu(waktu);
-
-    const id = window.setInterval(() => {
-      waktu -= 1;
-      setSisaWaktu(Math.max(0, waktu));
-      if (waktu <= 0) {
-        window.clearInterval(id);
-        akhiriUjian({ tampilkanTransisi: true });
-      }
-    }, 1000);
-
-    return () => window.clearInterval(id);
+    akhiriUjianRef.current = akhiriUjian;
   }, [akhiriUjian]);
 
-  // ---- Kalau pelanggaran melewati batas ----
-  useEffect(() => {
-    if (!guard.terminated) return;
+  // ---- countdown dari expires_at ----
+  // useEffect(() => {
+  //   if (!expiresAt) return undefined;
+  //   const target = new Date(expiresAt.replace(" ", "T")).getTime();
+  //   if (Number.isNaN(target)) return undefined;
+  //   const tick = () => {
+  //     const detik = Math.max(0, Math.floor((target - Date.now()) / 1000));
+  //     setSisaWaktu(detik);
+  //     if (detik <= 0) {
+  //       window.clearInterval(id);
+  //       akhiriUjian({ tampilkanTransisi: true });
+  //     }
+  //   };
+  //   tick();
+  //   const id = window.setInterval(tick, 1000);
+  //   return () => window.clearInterval(id);
+  // }, [expiresAt, akhiriUjian]);
 
-    const id = window.setTimeout(() => {
-      akhiriUjian({ tampilkanTransisi: true });
-    }, 5000);
-
-    return () => window.clearTimeout(id);
-  }, [guard.terminated, akhiriUjian]);
-
-  // ---- Focus ke iframe saat window focus ----
   useEffect(() => {
     const onWindowFocus = () => {
       if (showKonfirmasi || menyelesaikan || guard.terminated) return;
-      if (iframeSiap) fokusKeIframe();
+      fokusKeIframe();
     };
-
     window.addEventListener("focus", onWindowFocus);
     return () => window.removeEventListener("focus", onWindowFocus);
-  }, [
-    showKonfirmasi,
-    menyelesaikan,
-    guard.terminated,
-    iframeSiap,
-    fokusKeIframe,
-  ]);
+  }, [showKonfirmasi, menyelesaikan, guard.terminated, fokusKeIframe]);
 
-  // ---- Format waktu ----
+  useEffect(() => {
+    const deadline = Date.now() + DURASI_UJIAN * 1000;
+    let id;
+    const tick = () => {
+      const sisa = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      setSisaWaktu(sisa);
+      if (sisa <= 0) {
+        window.clearInterval(id);
+        akhiriUjianRef.current({ tampilkanTransisi: true });
+      }
+    };
+    tick();
+    id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ---- kalau pelanggaran melewati batas, kunci & akhiri paksa ----
+  useEffect(() => {
+    if (!guard.terminated) return undefined;
+    const id = window.setTimeout(() => {
+      akhiriUjianRef.current({ tampilkanTransisi: true });
+    }, 5000);
+    return () => window.clearTimeout(id);
+  }, [guard.terminated]);
+
   const waktuFormatted = useMemo(() => {
     if (sisaWaktu === null) return null;
     const m = Math.floor(sisaWaktu / 60)
@@ -169,39 +128,20 @@ export default function KioskLMS({ examData, guard, onSelesai, isMobile }) {
     return `${m}:${s}`;
   }, [sisaWaktu]);
 
-  const handleSelesaiClick = (e) => {
-    e?.preventDefault?.();
-    setShowKonfirmasi(true);
-  };
-  const handleBatalSelesai = (e) => {
-    e?.preventDefault?.();
+  const handleSelesaiClick = () => setShowKonfirmasi(true);
+  const handleBatalSelesai = () => {
     setShowKonfirmasi(false);
     fokusKeIframe();
   };
-  const handleKonfirmasiSelesai = (e) => {
-    e?.preventDefault?.();
+  const handleKonfirmasiSelesai = () => {
     setShowKonfirmasi(false);
     akhiriUjian({ tampilkanTransisi: true });
-  };
-
-  const handleIframeLoad = () => {
-    if (loadTimeoutRef.current) clearTimeout(loadTimeoutRef.current);
-    setIframeSiap(true);
-    setIframeError(null);
-    fokusKeIframe();
-  };
-
-  const handleIframeError = (e) => {
-    console.error("Iframe error:", e);
-    setIframeError("Gagal memuat ruang ujian");
   };
 
   if (!urlLms) return null;
 
   return (
-    <div
-      className={`klms-shell${menyelesaikan ? " klms-shell-fading" : ""} ${isMobile ? "klms-mobile" : "klms-desktop"}`}
-    >
+    <div className={`klms-shell${menyelesaikan ? " klms-shell-fading" : ""}`}>
       {/* ---------- Bar status di atas ---------- */}
       <div className="klms-topbar">
         <div className="klms-topbar-left">
@@ -210,12 +150,11 @@ export default function KioskLMS({ examData, guard, onSelesai, isMobile }) {
         </div>
         <div className="klms-topbar-center">
           {idKelas && <span className="klms-topbar-exam">{idKelas}</span>}
-          {/* VIOLATIONS DISPLAY DISABLED */}
-          {/* {guard.violationCount > 0 && !guard.terminated && (
+          {guard.violationCount > 0 && !guard.terminated && (
             <span className="klms-topbar-violation">
               Pelanggaran {guard.violationCount}/{guard.maxViolations}
             </span>
-          )} */}
+          )}
         </div>
         <div className="klms-topbar-right">
           {waktuFormatted && (
@@ -231,13 +170,7 @@ export default function KioskLMS({ examData, guard, onSelesai, isMobile }) {
         {!iframeSiap && (
           <div className="klms-frame-loading">
             <LoadingOutlined spin />
-            <span>{iframeError ? iframeError : "Memuat ruang ujian…"}</span>
-          </div>
-        )}
-        {iframeError && iframeSiap && (
-          <div className="klms-frame-error">
-            <WarningOutlined />
-            <span>{iframeError}</span>
+            <span>Memuat ruang ujian…</span>
           </div>
         )}
         <iframe
@@ -245,35 +178,35 @@ export default function KioskLMS({ examData, guard, onSelesai, isMobile }) {
           title="Ruang Ujian LMS"
           src={urlLms}
           className={`klms-frame${iframeSiap ? " klms-frame-ready" : ""}`}
-          onLoad={handleIframeLoad}
-          onError={handleIframeError}
-          sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-modals"
+          onLoad={() => {
+            setIframeSiap(true);
+            fokusKeIframe();
+          }}
+          sandbox="allow-scripts allow-same-origin allow-forms allow-downloads"
           allow="fullscreen"
           referrerPolicy="strict-origin-when-cross-origin"
-          loading="eager"
         />
       </div>
 
-      {/* ---------- Tombol Selesai ---------- */}
-      {!menyelesaikan && !guard.terminated && iframeSiap && (
+      {/* ---------- Tombol Selesai mengambang ---------- */}
+      {!menyelesaikan && !guard.terminated && (
         <button
           type="button"
           className="klms-finish-btn"
           onClick={handleSelesaiClick}
-          onTouchEnd={handleSelesaiClick}
         >
           <CheckCircleOutlined />
           Selesai
         </button>
       )}
 
-      {/* ---------- VIOLATIONS DISPLAY DISABLED ---------- */}
-      {/* {guard.peringatan && !guard.terminated && (
+      {/* ---------- Banner peringatan ---------- */}
+      {guard.peringatan && !guard.terminated && (
         <div className="kiosk-warning-banner">
           <WarningOutlined />
           <span>{guard.peringatan}</span>
         </div>
-      )} */}
+      )}
 
       {/* ---------- Modal konfirmasi selesai ---------- */}
       {showKonfirmasi && (
@@ -293,7 +226,6 @@ export default function KioskLMS({ examData, guard, onSelesai, isMobile }) {
                 type="button"
                 className="klms-modal-btn-ghost"
                 onClick={handleBatalSelesai}
-                onTouchEnd={handleBatalSelesai}
               >
                 Batal, Kembali
               </button>
@@ -301,7 +233,6 @@ export default function KioskLMS({ examData, guard, onSelesai, isMobile }) {
                 type="button"
                 className="klms-modal-btn-solid"
                 onClick={handleKonfirmasiSelesai}
-                onTouchEnd={handleKonfirmasiSelesai}
               >
                 Ya, Selesai
               </button>
@@ -310,7 +241,7 @@ export default function KioskLMS({ examData, guard, onSelesai, isMobile }) {
         </div>
       )}
 
-      {/* ---------- Layar kunci paksa --------- */}
+      {/* ---------- Layar kunci paksa akibat pelanggaran berulang ---------- */}
       {guard.terminated && (
         <div className="klms-lockdown-overlay">
           <StopOutlined />
@@ -323,7 +254,7 @@ export default function KioskLMS({ examData, guard, onSelesai, isMobile }) {
         </div>
       )}
 
-      {/* ---------- Layar transisi keluar ---------- */}
+      {/* ---------- Layar transisi saat menyelesaikan ---------- */}
       {menyelesaikan && (
         <div className="klms-exit-overlay">
           <LoadingOutlined spin />
