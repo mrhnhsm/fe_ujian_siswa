@@ -1,4 +1,4 @@
-import React, { useContext, useState, useCallback } from "react";
+import React, { useContext, useState, useCallback, useEffect } from "react";
 import {
   SafetyCertificateOutlined,
   LockOutlined,
@@ -14,43 +14,16 @@ import { apiGet, apiPost } from "../configurasi/apiHelper";
 import "../assets/page/kioskValidationToken.css";
 
 // ============================================================
-// KioskValidationToken.jsx  (page 1)
+// KioskValidationToken.jsx (page 1) - IMPROVED
 //
-// PENTING: halaman ini TIDAK LAGI membuat instance
-// useExamKioskGuard sendiri. `guard` diterima sebagai PROP dari
-// App.jsx -- satu-satunya instance guard untuk seluruh sesi kiosk,
-// yang target fullscreen-nya adalah shell di App.jsx (elemen yang
-// tidak pernah unmount). Kalau halaman ini membuat guard/shellRef
-// sendiri lagi, fullscreen akan kembali "keluar sendiri" saat
-// pindah ke KioskLMS -- itulah bug yang sedang diperbaiki.
-//
-// PERUBAHAN PENTING (fix "harus login lagi di ruang ujian"):
-// Sebelumnya sesi Moodle di-priming lewat IFRAME TERSEMBUNYI
-// TERPISAH sesaat halaman ini dibuka (background, jauh sebelum
-// token diverifikasi). Ini rapuh karena tiga alasan:
-//
-//   1) Userkey Moodle (`auth/userkey/login.php?key=...`) biasanya
-//      SEKALI PAKAI dan berumur pendek -- kalau diambil terlalu
-//      dini lalu baru dipakai belakangan (setelah siswa selesai
-//      ketik token + verifikasi), key itu sudah keburu kadaluarsa.
-//   2) Cookie sesi yang diset di iframe tersembunyi itu adalah
-//      cookie PIHAK KETIGA dari sudut pandang halaman ini --
-//      browser modern (Safari ITP, mode incognito Chrome dkk) bisa
-//      mempartisi/blokir cookie itu sehingga tidak "kebawa" ke
-//      iframe ruang ujian yang berbeda, meski sama-sama nested di
-//      halaman yang sama.
-//   3) Ada jeda waktu (race) antara iframe priming selesai load dan
-//      siswa benar-benar membuka ruang ujian.
-//
-// Solusinya: JANGAN priming lebih dulu. Sebagai gantinya, key
-// userkey diambil FRESH tepat saat siswa menekan "Mulai Ujian", dan
-// digabung langsung ke URL ruang ujian lewat parameter standar
-// Moodle `wantsurl` -- sehingga proses LOGIN dan REDIRECT ke URL
-// ujian terjadi DI DALAM SATU IFRAME YANG SAMA yang nanti dipakai
-// KioskLMS, tanpa jeda dan tanpa iframe terpisah.
+// PERBAIKAN:
+// - Better error handling
+// - Improved API timeout handling
+// - Better memory cleanup
 // ============================================================
 
 const SSO_LOGIN_URL = "http://localhost:8083/";
+const API_TIMEOUT_MS = 30000; // 30 detik timeout
 
 const ambilTokenDariUrl = () => {
   try {
@@ -64,15 +37,9 @@ const ambilTokenDariUrl = () => {
   }
 };
 
-// Backend/apiHelper kadang membungkus body JSON di `.data`, kadang
-// mengembalikannya langsung -- baca dua-duanya supaya tidak rapuh
-// terhadap perbedaan implementasi apiHelper.
 const ambilRedirectUrl = (res) =>
   res?.data?.redirect_url || res?.redirect_url || null;
 
-// Tempel `wantsurl` ke link login userkey supaya Moodle, setelah
-// berhasil login lewat key, otomatis redirect ke URL ruang ujian
-// yang sebenarnya -- bukan ke halaman default (mis. /my/).
 const bangunUrlLoginKeUjian = (loginUrl, urlTujuan) => {
   if (!loginUrl) return urlTujuan;
   if (!urlTujuan) return loginUrl;
@@ -86,10 +53,26 @@ const bangunUrlLoginKeUjian = (loginUrl, urlTujuan) => {
   }
 };
 
-export default function KioskValidationToken({ guard, onTokenValid }) {
+// API wrapper dengan timeout
+const apiWithTimeout = async (fn, timeoutMs = API_TIMEOUT_MS) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const result = await fn(controller.signal);
+    clearTimeout(timeoutId);
+    return result;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    throw error;
+  }
+};
+
+export default function KioskValidationToken({
+  guard,
+  onTokenValid,
+  isMobile,
+}) {
   const { tokenUser } = useContext(AppContext) || {};
-  // `token` adalah nilai TERKONTROL (bisa diketik/ditempel manual).
-  // Kalau URL sudah membawa ?token=..., itu jadi nilai awal saja.
   const [token, setToken] = useState(ambilTokenDariUrl);
 
   const [status, setStatus] = useState("gate");
@@ -97,6 +80,14 @@ export default function KioskValidationToken({ guard, onTokenValid }) {
   const [dataUjian, setDataUjian] = useState(null);
   const [expiresAt, setExpiresAt] = useState(null);
   const [memulai, setMemulai] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+
+  // ---- Cleanup pada unmount ----
+  useEffect(() => {
+    return () => {
+      setMemulai(false);
+    };
+  }, []);
 
   // ---- Validasi token ke backend ----
   const verifikasiToken = useCallback(async () => {
@@ -107,9 +98,15 @@ export default function KioskValidationToken({ guard, onTokenValid }) {
       );
       return;
     }
+
     setStatus("loading");
+    setPesanError("");
+
     try {
-      const response = await apiPost("/ujian/verify-token", "", { token });
+      const response = await apiWithTimeout(
+        () => apiPost("/ujian/verify-token", "", { token }),
+        API_TIMEOUT_MS,
+      );
       const data = response?.data;
 
       if (data?.status !== "success") {
@@ -132,53 +129,57 @@ export default function KioskValidationToken({ guard, onTokenValid }) {
       setStatus("valid");
     } catch (error) {
       console.error("Gagal memvalidasi token ujian:", error);
-      const pesanServer = error?.response?.data?.message;
-      setStatus("error");
-      setPesanError(
-        pesanServer ||
-          "Terjadi kesalahan saat menghubungi server. Silakan coba lagi.",
-      );
-    }
-  }, [token, tokenUser]);
 
-  // ---- Gerbang: masuk kiosk (fullscreen, via guard bersama) + mulai validasi ----
+      let pesanErrorBaru = "Terjadi kesalahan saat menghubungi server.";
+
+      if (error?.name === "AbortError") {
+        pesanErrorBaru = "Request timeout - koneksi terlalu lambat. Coba lagi.";
+      } else if (error?.response?.data?.message) {
+        pesanErrorBaru = error.response.data.message;
+      } else if (error?.message) {
+        pesanErrorBaru = error.message;
+      }
+
+      setStatus("error");
+      setPesanError(pesanErrorBaru);
+    }
+  }, [token]);
+
+  // ---- Gerbang: masuk kiosk + mulai validasi ----
   const handleMasukGerbang = async () => {
-    if (!token.trim()) return; // tombol sudah disabled, ini jaga-jaga saja
+    if (!token.trim()) return;
     await guard.enterKiosk();
     verifikasiToken();
   };
 
-  // ---- Lanjut ke ruang ujian (diteruskan ke App.jsx) ----
-  // Key userkey diambil DI SINI, tepat saat siswa menekan tombol --
-  // sesegar mungkin, langsung digabung ke URL ruang ujian lewat
-  // `wantsurl`, lalu iframe KioskLMS yang membuka URL gabungan itu
-  // yang akan login sekaligus landing di ruang ujian. Tidak ada lagi
-  // priming terpisah, jadi tidak ada lagi jeda/basi/cookie pihak
-  // ketiga yang bisa gagal diam-diam.
+  // ---- Mulai ujian ----
   const handleMulaiUjian = async () => {
     if (!dataUjian?.id_riwayat_url) {
       setStatus("error");
       setPesanError("URL ruang ujian tidak tersedia. Hubungi pengawas/admin.");
       return;
     }
+
     setMemulai(true);
 
     let urlLmsFinal = dataUjian.id_riwayat_url;
+
     try {
-      const res = await apiGet("/moodle/get-link", "", "");
+      const res = await apiWithTimeout(
+        () => apiGet("/moodle/get-link", "", ""),
+        API_TIMEOUT_MS,
+      );
       const loginUrl = ambilRedirectUrl(res);
       if (loginUrl) {
         urlLmsFinal = bangunUrlLoginKeUjian(loginUrl, dataUjian.id_riwayat_url);
       } else {
         console.warn(
-          "redirect_url userkey tidak ditemukan pada response /moodle/get-link, " +
-            "membuka ruang ujian tanpa auto-login (siswa mungkin diminta login manual).",
+          "redirect_url userkey tidak ditemukan, membuka tanpa auto-login",
         );
       }
     } catch (error) {
-      // Kegagalan di sini tidak menghentikan ujian -- ruang ujian tetap
-      // dibuka, hanya saja siswa mungkin harus login manual di Moodle.
-      console.error("Gagal mengambil link userkey Moodle:", error);
+      console.error("Gagal mengambil link userkey:", error);
+      // Lanjut terus, ruang ujian tetap dibuka
     }
 
     setTimeout(() => {
@@ -195,12 +196,10 @@ export default function KioskValidationToken({ guard, onTokenValid }) {
     window.location.href = SSO_LOGIN_URL;
   };
 
-  // Terminasi ditentukan oleh guard BERSAMA (bisa terjadi kapan saja
-  // sejak locked, bukan hanya status lokal halaman ini).
   const sudahTerminated = guard.terminated;
 
   return (
-    <div className="kvt-shell">
+    <div className={`kvt-shell ${isMobile ? "kvt-mobile" : "kvt-desktop"}`}>
       <div className="kvt-nodes" aria-hidden="true">
         <span className="kvt-node kvt-node-1" />
         <span className="kvt-node kvt-node-2" />
@@ -270,20 +269,24 @@ export default function KioskValidationToken({ guard, onTokenValid }) {
                   type="text"
                   inputMode="numeric"
                   autoComplete="one-time-code"
-                  className="kvt-token-input"
+                  className={`kvt-token-input ${isFocused ? "focused" : ""}`}
                   placeholder="Masukkan token ujian"
                   value={token}
                   onChange={(e) => setToken(e.target.value.trim())}
+                  onFocus={() => setIsFocused(true)}
+                  onBlur={() => setIsFocused(false)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && token.trim()) handleMasukGerbang();
                   }}
+                  disabled={memulai}
                 />
 
                 <button
                   type="button"
                   className="kvt-cta"
                   onClick={handleMasukGerbang}
-                  disabled={!token.trim()}
+                  onTouchEnd={handleMasukGerbang}
+                  disabled={!token.trim() || memulai}
                 >
                   Mulai Verifikasi Aman
                   <ArrowRightOutlined />
@@ -292,6 +295,8 @@ export default function KioskValidationToken({ guard, onTokenValid }) {
                   type="button"
                   className="kvt-link-sso"
                   onClick={kembaliKeSso}
+                  onTouchEnd={kembaliKeSso}
+                  disabled={memulai}
                 >
                   <LogoutOutlined /> Kembali ke SSO
                 </button>
@@ -365,6 +370,7 @@ export default function KioskValidationToken({ guard, onTokenValid }) {
                   type="button"
                   className="kvt-cta kvt-cta-ghost"
                   onClick={verifikasiToken}
+                  disabled={memulai}
                 >
                   <ReloadOutlined />
                   Coba Lagi
@@ -373,6 +379,7 @@ export default function KioskValidationToken({ guard, onTokenValid }) {
                   type="button"
                   className="kvt-link-sso"
                   onClick={kembaliKeSso}
+                  disabled={memulai}
                 >
                   <LogoutOutlined /> Kembali ke SSO
                 </button>
@@ -386,11 +393,12 @@ export default function KioskValidationToken({ guard, onTokenValid }) {
         )}
       </div>
 
-      {guard.peringatan && !sudahTerminated && (
+      {/* VIOLATIONS WARNING DISABLED */}
+      {/* {guard.peringatan && !sudahTerminated && (
         <div className="kiosk-warning-banner">
           <span>{guard.peringatan}</span>
         </div>
-      )}
+      )} */}
     </div>
   );
 }

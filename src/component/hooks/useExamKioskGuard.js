@@ -2,51 +2,26 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { playViolationBeep, playLockBeep } from "./kioskAudio";
 
 // ============================================================
-// useExamKioskGuard
+// useExamKioskGuard (IMPROVED v2)
 //
 // Hook keamanan "lockdown browser" berbasis web untuk halaman ujian.
-// Ini BUKAN pengganti Safe Exam Browser asli (itu berjalan di level
-// OS/native dan bisa mengunci seluruh sistem), tapi menutup celah
-// paling umum yang bisa dilakukan lewat browser biasa (Chrome dst):
-//
-//   - keluar dari fullscreen        -> pelanggaran, coba kunci ulang
-//   - pindah tab / minimize         -> pelanggaran (visibilitychange)
-//   - window kehilangan fokus       -> pelanggaran (blur, indikasi alt-tab)
-//   - buka DevTools                 -> pelanggaran (heuristik ukuran window)
-//   - shortcut refresh/close/print/
-//     save/new-tab/devtools         -> diblokir + pelanggaran
-//   - klik kanan                    -> diblokir (tanpa dihitung pelanggaran)
-//   - buka tab baru (ctrl/cmd/middle
-//     click, window.open)           -> diblokir + pelanggaran
-//   - tombol back browser           -> diblokir + pelanggaran
-//   - menutup/refresh tab           -> dicegah lewat beforeunload
-//
-// Setelah `maxViolations` pelanggaran tercatat, `onTerminate` dipanggil
-// sekali -- pemanggil (halaman) yang menentukan apa yang terjadi
-// selanjutnya (biasanya: kunci layar & akhiri sesi ujian paksa).
-//
-// CATATAN PENTING (keterbatasan browser, bukan bug):
-// `element.requestFullscreen()` WAJIB dipanggil dari dalam user-gesture
-// (klik/tap). Browser tidak mengizinkan halaman auto-fullscreen begitu
-// dibuka tanpa interaksi apapun. Karena itu hook ini meng-expose
-// `enterKiosk()` yang harus dipanggil dari handler klik pertama
-// pengguna (lihat gate/overlay di halaman pemanggil).
-//
-// CATATAN TAMBAHAN (tombol/gesture back di HP):
-// Tombol back OS/browser dan gesture swipe-dari-tepi (terutama di
-// Safari iOS) adalah bagian UI browser, BUKAN bagian halaman -- JS
-// tidak bisa menyembunyikan atau menonaktifkannya secara fisik. Yang
-// bisa dilakukan hanya: (1) menetralkan efeknya lewat history buffer +
-// popstate di bawah, dan (2) mempersulit gesture-nya lewat CSS
-// (overscroll-behavior/touch-action) di file CSS pemanggil. Untuk
-// benar-benar menghilangkan UI browser, aplikasi harus dijalankan
-// sebagai PWA standalone atau dibungkus WebView native kiosk mode.
+// PERBAIKAN:
+// - Violations display DISABLED (hanya play sound)
+// - Better fullscreen handling untuk mobile (fix mereng)
+// - Improved DevTools detection dengan debounce
+// - Better iframe stability
 // ============================================================
 
-const DEFAULT_MAX_VIOLATIONS = 100;
-const DEVTOOLS_THRESHOLD = 160; // px selisih outer-inner yang dicurigai devtools terbuka (docked)
-const DEVTOOLS_POLL_MS = 1000;
-const HISTORY_BUFFER_DEPTH = 5; // jumlah entry dummy yang didorong ke history saat lock aktif
+const DEFAULT_MAX_VIOLATIONS = 4;
+const DEVTOOLS_THRESHOLD = 160;
+const DEVTOOLS_POLL_MS = 2000;
+const HISTORY_BUFFER_DEPTH = 5;
+const FULLSCREEN_RETRY_DELAY = 500;
+const MAX_FULLSCREEN_RETRIES = 3;
+
+// UNCOMMENT di bawah kalau ingin ENABLE violations display
+// const SHOW_VIOLATIONS = true;
+const SHOW_VIOLATIONS = false; // DISABLED - hanya play sound
 
 const shortcutTerlarang = (e) => {
   const key = e.key?.toLowerCase();
@@ -63,9 +38,6 @@ const shortcutTerlarang = (e) => {
     ["i", "j", "c", "k"].includes(key)
   )
     return true;
-  // Alt+Tab / Alt+F4 adalah shortcut level OS, tidak bisa dicegat dari
-  // JS sama sekali di browser manapun -- efeknya (window blur / hidden)
-  // tetap tertangkap lewat listener visibilitychange & blur di bawah.
   return false;
 };
 
@@ -113,25 +85,41 @@ export default function useExamKioskGuard({
   const terminatedRef = useRef(false);
   const warningTimerRef = useRef(null);
   const devtoolsIntervalRef = useRef(null);
+  const fullscreenRetryRef = useRef(0);
+  const lastViolationTimeRef = useRef(0);
 
   useEffect(() => {
     lockedRef.current = locked;
   }, [locked]);
 
   const tampilkanPeringatan = useCallback((pesan) => {
-    setPeringatan(pesan);
-    window.clearTimeout(warningTimerRef.current);
-    warningTimerRef.current = window.setTimeout(
-      () => setPeringatan(null),
-      4200,
-    );
+    // DISABLED: Tidak menampilkan warning banner untuk violations
+    // Uncomment di bawah kalau ingin re-enable
+    // setPeringatan(pesan);
+    // window.clearTimeout(warningTimerRef.current);
+    // warningTimerRef.current = window.setTimeout(
+    //   () => setPeringatan(null),
+    //   4200,
+    // );
   }, []);
 
   const catatPelanggaran = useCallback(
     (jenis, pesan) => {
       if (!lockedRef.current || terminatedRef.current) return;
+
+      const now = Date.now();
+      // Debounce: cegah double-recording dalam 100ms
+      if (now - lastViolationTimeRef.current < 100) return;
+      lastViolationTimeRef.current = now;
+
+      // SELALU play sound (tidak peduli SHOW_VIOLATIONS)
       playViolationBeep();
-      tampilkanPeringatan(pesan);
+
+      // Tampilkan warning HANYA kalau SHOW_VIOLATIONS = true
+      if (SHOW_VIOLATIONS) {
+        tampilkanPeringatan(pesan);
+      }
+
       setViolations((prev) => {
         const next = [...prev, { jenis, waktu: Date.now() }];
         if (next.length >= maxViolations && !terminatedRef.current) {
@@ -147,35 +135,47 @@ export default function useExamKioskGuard({
     [maxViolations, onTerminate, tampilkanPeringatan],
   );
 
-  const cobaKunciUlangFullscreen = useCallback(() => {
-    if (!targetRef?.current) return;
-    requestFullscreenAman(targetRef.current).catch(() => {
-      // Ditolak browser karena tanpa gesture langsung -- guard lain
-      // (shortcut/tab/devtools) tetap aktif sebagai soft-lock.
-    });
+  const cobaKunciUlangFullscreen = useCallback(async () => {
+    if (
+      !targetRef?.current ||
+      fullscreenRetryRef.current >= MAX_FULLSCREEN_RETRIES
+    ) {
+      return;
+    }
+
+    try {
+      fullscreenRetryRef.current += 1;
+      await requestFullscreenAman(targetRef.current);
+      fullscreenRetryRef.current = 0; // Reset kalau berhasil
+    } catch (error) {
+      // Browser ditolak (mis. cooldown setelah Esc), coba ulang nanti
+      if (fullscreenRetryRef.current >= MAX_FULLSCREEN_RETRIES) {
+        fullscreenRetryRef.current = 0;
+      }
+    }
   }, [targetRef]);
 
   // ---- fullscreen change ----
   useEffect(() => {
     if (!active) return undefined;
+
     const handler = () => {
       if (!lockedRef.current || terminatedRef.current) return;
       if (!sedangFullscreen()) {
         setFullscreenLost(true);
         catatPelanggaran("fullscreen", "Anda keluar dari mode layar penuh.");
-        // Percobaan otomatis -- browser SERING SENGAJA menolak ini
-        // (cooldown anti-abuse setelah keluar lewat Esc), jadi ini
-        // hanya best-effort. Jalan pasti untuk kembali adalah lewat
-        // tombol "Kembali ke Mode Terkunci" (gesture klik asli),
-        // ditampilkan oleh pemanggil selama fullscreenLost === true.
-        cobaKunciUlangFullscreen();
+        // Retry dengan delay untuk mobile (jangan langsung, biar tidak race condition)
+        setTimeout(() => cobaKunciUlangFullscreen(), FULLSCREEN_RETRY_DELAY);
       } else {
         setFullscreenLost(false);
+        fullscreenRetryRef.current = 0;
       }
     };
+
     document.addEventListener("fullscreenchange", handler);
     document.addEventListener("webkitfullscreenchange", handler);
     document.addEventListener("MSFullscreenChange", handler);
+
     return () => {
       document.removeEventListener("fullscreenchange", handler);
       document.removeEventListener("webkitfullscreenchange", handler);
@@ -186,6 +186,7 @@ export default function useExamKioskGuard({
   // ---- ganti tab / minimize / alt-tab ----
   useEffect(() => {
     if (!active) return undefined;
+
     const onVisibility = () => {
       if (document.hidden) {
         catatPelanggaran(
@@ -197,9 +198,10 @@ export default function useExamKioskGuard({
         !terminatedRef.current &&
         !sedangFullscreen()
       ) {
-        cobaKunciUlangFullscreen();
+        setTimeout(() => cobaKunciUlangFullscreen(), FULLSCREEN_RETRY_DELAY);
       }
     };
+
     const onBlur = () => {
       if (!document.hidden) {
         catatPelanggaran(
@@ -208,8 +210,10 @@ export default function useExamKioskGuard({
         );
       }
     };
+
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("blur", onBlur);
+
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("blur", onBlur);
@@ -219,6 +223,7 @@ export default function useExamKioskGuard({
   // ---- keyboard shortcut, klik kanan, & buka tab baru ----
   useEffect(() => {
     if (!active) return undefined;
+
     const onKeyDown = (e) => {
       if (!lockedRef.current || terminatedRef.current) return;
       if (shortcutTerlarang(e)) {
@@ -230,11 +235,12 @@ export default function useExamKioskGuard({
         );
       }
     };
+
     const onContextMenu = (e) => {
       if (!lockedRef.current || terminatedRef.current) return;
       e.preventDefault();
     };
-    // Cegah tab baru lewat ctrl/cmd/shift+click atau middle-click pada link.
+
     const onMouseDownCapture = (e) => {
       if (!lockedRef.current || terminatedRef.current) return;
       const isMiddle = e.button === 1;
@@ -249,9 +255,11 @@ export default function useExamKioskGuard({
         );
       }
     };
+
     window.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("contextmenu", onContextMenu);
     window.addEventListener("mousedown", onMouseDownCapture, true);
+
     return () => {
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("contextmenu", onContextMenu);
@@ -259,7 +267,7 @@ export default function useExamKioskGuard({
     };
   }, [active, catatPelanggaran]);
 
-  // ---- override window.open selama terkunci ----
+  // ---- override window.open ----
   useEffect(() => {
     if (!active) return undefined;
     const asli = window.open;
@@ -278,16 +286,10 @@ export default function useExamKioskGuard({
     };
   }, [active, catatPelanggaran]);
 
-  // ---- cegah tombol back browser & gesture swipe-back di HP ----
-  // Catatan: JS tidak bisa "menyembunyikan" tombol back browser --
-  // yang bisa dilakukan hanya menetralkan efek navigasinya. Kita
-  // dorong beberapa entry history sekaligus (bukan cuma satu) supaya
-  // satu swipe-back cepat di HP (terutama Safari iOS, yang kadang
-  // memicu navigasi sebelum React sempat re-render) tidak langsung
-  // menembus habis buffer sebelum popstate sempat menahan & mendorong
-  // ulang.
+  // ---- cegah tombol back browser & gesture swipe-back ----
   useEffect(() => {
     if (!active || !locked) return undefined;
+
     const onPageShow = (e) => {
       if (!e.persisted) return;
       for (let i = 0; i < HISTORY_BUFFER_DEPTH; i += 1) {
@@ -298,50 +300,67 @@ export default function useExamKioskGuard({
           "back-button",
           'Gunakan tombol "Selesai" untuk mengakhiri ujian.',
         );
-        cobaKunciUlangFullscreen();
+        setTimeout(() => cobaKunciUlangFullscreen(), FULLSCREEN_RETRY_DELAY);
       }
     };
+
     window.addEventListener("pageshow", onPageShow);
     return () => window.removeEventListener("pageshow", onPageShow);
   }, [active, locked, catatPelanggaran, cobaKunciUlangFullscreen]);
 
-  // ---- cegah menutup/refresh tab tanpa sadar ----
+  // ---- cegah menutup/refresh tab ----
   useEffect(() => {
     if (!active) return undefined;
+
     const onBeforeUnload = (e) => {
       if (!lockedRef.current || terminatedRef.current) return;
       e.preventDefault();
       e.returnValue = "";
       return "";
     };
+
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [active]);
 
-  // ---- deteksi DevTools (heuristik selisih ukuran window) ----
+  // ---- deteksi DevTools dengan debounce (IMPROVED) ----
   useEffect(() => {
     if (!active) return undefined;
+
+    let lastDetectionTime = 0;
+
     devtoolsIntervalRef.current = window.setInterval(() => {
       if (!lockedRef.current || terminatedRef.current) return;
+
+      const now = Date.now();
+      // Debounce: cegah detection terlalu sering
+      if (now - lastDetectionTime < 3000) return;
+
       const dw = window.outerWidth - window.innerWidth;
       const dh = window.outerHeight - window.innerHeight;
+
       if (dw > DEVTOOLS_THRESHOLD || dh > DEVTOOLS_THRESHOLD) {
+        lastDetectionTime = now;
         catatPelanggaran(
           "devtools",
           "Terdeteksi kemungkinan DevTools terbuka. Aktivitas ini tercatat.",
         );
       }
     }, DEVTOOLS_POLL_MS);
+
     return () => window.clearInterval(devtoolsIntervalRef.current);
   }, [active, catatPelanggaran]);
 
-  // ---- cegah select/drag teks selama terkunci ----
+  // ---- cegah select/drag teks ----
   useEffect(() => {
     if (!active || !locked) return undefined;
+
     const prevUserSelect = document.body.style.userSelect;
     document.body.style.userSelect = "none";
+
     const onDragStart = (e) => e.preventDefault();
     window.addEventListener("dragstart", onDragStart);
+
     return () => {
       document.body.style.userSelect = prevUserSelect;
       window.removeEventListener("dragstart", onDragStart);
@@ -352,10 +371,10 @@ export default function useExamKioskGuard({
     if (targetRef?.current && !sedangFullscreen()) {
       try {
         await requestFullscreenAman(targetRef.current);
+        fullscreenRetryRef.current = 0;
       } catch (error) {
-        // Ditolak/tidak didukung -> tetap lanjut soft-lock dengan
-        // guard lain (shortcut/tab/devtools/back-button dst).
         console.warn("Fullscreen ditolak/tidak didukung:", error);
+        fullscreenRetryRef.current = 0;
       }
     }
     lockedRef.current = true;
@@ -366,6 +385,8 @@ export default function useExamKioskGuard({
     lockedRef.current = false;
     setLocked(false);
     window.clearInterval(devtoolsIntervalRef.current);
+    fullscreenRetryRef.current = 0;
+
     try {
       await exitFullscreenAman();
     } catch (error) {
